@@ -3,87 +3,71 @@ name: Update Logos Database
 on:
   push:
     paths:
-      - 'logos/**'  # Se activa cuando se modifican archivos en el directorio logos
+      - 'logos/**'
 
 jobs:
   update-logos-json:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Permiso para hacer commit
-    
+      contents: write
+
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        fetch-depth: 0
 
     - name: Generate Logos JSON
+      id: generate-json
       run: |
-        # Crear el archivo JSON si no existe
-        if [ ! -f logos.json ]; then
-          echo '{}' > logos.json
-        fi
+        # Crear directorio si no existe
+        mkdir -p logos
+        
+        # Generar JSON con todas las imágenes
+        echo "Generando logos.json..."
+        echo '{' > logos.json
+        
+        # Buscar archivos de imagen y procesarlos
+        first=true
+        for file in logos/*; do
+          if [ -f "$file" ]; then
+            filename=$(basename -- "$file")
+            channel_name="${filename%.*}"
+            raw_url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/$file"
+            
+            if [ "$first" = false ]; then
+              echo "," >> logos.json
+            else
+              first=false
+            fi
+            
+            echo -n "  \"$channel_name\": \"$raw_url\"" >> logos.json
+          fi
+        done
+        
+        echo "" >> logos.json
+        echo '}' >> logos.json
+        
+        # Contar elementos
+        item_count=$(grep -c '"' logos.json || true)
+        echo "Total de logos: $(( (item_count - 2) / 2 ))"
+        
+    - name: Show Generated JSON
+      run: cat logos.json
 
-        # Instalar dependencias
-        python -m pip install PyGithub
-
-        # Ejecutar script de actualización
-        python - <<EOF
-        import os
-        import json
-        import glob
-        from github import Github
-
-        # Configuración
-        REPO_NAME = os.environ['GITHUB_REPOSITORY']
-        LOGOS_DIR = 'logos'
-        JSON_FILE = 'logos.json'
-        GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
-
-        # Obtener archivos modificados
-        added_files = []
-        if os.environ.get('GITHUB_EVENT_NAME') == 'push':
-            event_path = os.environ['GITHUB_EVENT_PATH']
-            with open(event_path) as f:
-                event = json.load(f)
-            for commit in event.get('commits', []):
-                added_files.extend(commit.get('added', []))
-
-        # Cargar JSON existente
-        with open(JSON_FILE, 'r') as f:
-            logos_db = json.load(f)
-
-        # Procesar nuevas imágenes
-        updated = False
-        for file in added_files:
-            if file.startswith(f"{LOGOS_DIR}/") and file.split('.')[-1].lower() in ['png', 'jpg', 'jpeg', 'webp']:
-                channel_name = os.path.splitext(os.path.basename(file))[0]
-                raw_url = f"https://raw.githubusercontent.com/{REPO_NAME}/main/{file}"
-                
-                # Agregar al JSON si no existe
-                if channel_name not in logos_db:
-                    logos_db[channel_name] = raw_url
-                    print(f"Added: {channel_name} -> {raw_url}")
-                    updated = True
-
-        # Guardar cambios
-        if updated:
-            with open(JSON_FILE, 'w') as f:
-                json.dump(logos_db, f, indent=2)
-            print("Logos database updated!")
-        else:
-            print("No new logos to add")
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Commit Changes
-      if: success()
+    - name: Commit and Push Changes
       run: |
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
+        
+        # Verificar cambios
         git add logos.json
-        git diff --quiet && git diff --staged --quiet || git commit -m "Actualizar base de datos de logos"
-        git push
+        git status
+        
+        if ! git diff-index --quiet HEAD --; then
+          git commit -m "Actualizar base de datos de logos"
+          git push
+          echo "Changes pushed"
+        else
+          echo "No changes to commit"
+        fi
